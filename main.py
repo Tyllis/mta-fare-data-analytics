@@ -3,9 +3,7 @@
 @author: junyan
 """
 
-import os
-import dash
-import dash_table
+import os, gc, dash, dash_table
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -27,18 +25,19 @@ data_url = os.environ['DATA_URL']
 api = KaggleApi()
 api.authenticate()
 api.dataset_download_file(data_url, file_name='main.csv')
-api.dataset_download_file(data_url, file_name='station_gis.csv')
+api.dataset_download_file(data_url, file_name='forecast.csv')
 
 df = pd.read_csv('./main.csv.zip')
 geo_df = pd.read_csv('./station_gis.csv')
+forecast_df = pd.read_csv('./forecast.csv.zip')
+start_date = '2020-01-04'
 
 df.WEEK = df.WEEK.apply(lambda x: datetime.strptime(x, '%Y-%m-%d'))
-card_types = df.drop(columns=['WEEK', 'REMOTE', 'STATION']).sum(axis=0). \
-    sort_values(ascending=False).index.tolist()
-stations = df['STATION'].sort_values().unique().tolist()
+df.drop(columns=['1-D UNL', '14-D UNL', '14-D RFM UNL'], inplace=True)
+card_types = df.drop(columns=['WEEK', 'REMOTE', 'STATION']).sum(axis=0).sort_values(ascending=False).index.tolist()
+stations = geo_df['STATION'].sort_values().unique().tolist()
 week_ending_cur = df.WEEK.max()
 week_ending_old = week_ending_cur - timedelta(weeks=(week_ending_cur.year - 2019) * 52)
-start_date = '2020-01-04'
 
 df_sel = df[df['STATION'].isin(stations)].copy()
 df_sel['row_sum'] = df_sel[card_types].sum(axis=1)
@@ -51,6 +50,11 @@ df_meg['Pre-pandemic Daily'] = (df_meg['row_sum_y'] / 7).apply(lambda x: '{:,}'.
 df_meg = df_meg.merge(geo_df, how='left', on='STATION')
 df_meg['size'] = df_meg['row_sum_x'].fillna(0) / 7
 df_meg['ratio'] = df_meg['ratio'].fillna(0)
+df = df[df.WEEK >= datetime.strptime(start_date, '%Y-%m-%d')]
+
+del df_sel, df_cur, df_old
+_ = gc.collect()
+
 fig = px.scatter_mapbox(
     df_meg, lat="lat", lon="lon", size='size', color='ratio', zoom=10,
     labels={'ratio': '% Recovery'},
@@ -94,21 +98,21 @@ card_intro_text = dbc.Card([
             'The New York City Transit subway fare data are based on the number of MetroCard ' +
             'swipes made each week by customers entering each station of the New York City ' +
             'Subway, PATH, AirTrain JFK and the Roosevelt Island Tram. The data is released ' +
-            'one week after the recorded week. This dashboard is updated every Sunday when the ' +
+            'one week after the recorded week. This dashboard is updated every Monday after the ' +
             'new data is released.'
         ]),
         html.P([
             'On the Pandemic Recovery map, the size of the circle shows the relative ' +
             'volume of MetroCard swipes at each station for the recent week ' +
-            '(larger means more swipes); the color reflects the precent recovery, ' +
+            '(larger means more swipes); the color reflects the percent recovery, ' +
             'calculated by dividing the recent volume by the pre-pandemic ' +
             'volume. The pre-pandemic data is defined as the 2019 data at the week ' +
             'corresponding to recent week. '
         ]),
         html.P([
             'Explore the map by using the "Box Select" or "Lasso Select" to select ' +
-            'the stations of interest. The Trend, Ranking, and Table will interact ' +
-            'based on the station selection. Clicking on the buttons in the Selected ' +
+            'the stations of interest. The Trend, Forecast, Ranking, and Table will interact ' +
+            'based on the stations selected. Clicking on the buttons in the Selected ' +
             'Stations area toggles the stations on/off. To reset to default selection ' +
             '(all stations), double click on any area on the map.'
         ]),
@@ -120,7 +124,11 @@ card_intro_text = dbc.Card([
             html.A('here',
                    href='http://web.mta.info/developers/resources/nyct/fares/fare_type_description.txt'),
             '. Explore the ranking graph by dragging the slider to view station ranking ' +
-            'in different time period, or use the play button for an animation through time.'
+            'in different time period, or use the play button for an animation through time. Ridership forecast ' +
+            'is done using AutoARIMA. For detail see ',
+            html.A('here',
+                   href='https://github.com/nixtla/statsforecast'),
+            '.'
         ])
     ])
 ],
@@ -181,6 +189,19 @@ card_areaplot = dbc.Card([
     className=card_class
 )
 
+card_forecastplot = dbc.Card([
+    dbc.CardHeader("Forecast for Selected Stations",
+                   style={'font-weight': 'bold'}
+                   ),
+    dbc.CardBody(
+        dcc.Graph(
+            id='forecast_plot'
+        )
+    )
+],
+    className=card_class
+)
+
 card_datatable = dbc.Card([
     dbc.CardHeader("Data Table for Selected Stations",
                    style={'font-weight': 'bold'}
@@ -215,6 +236,7 @@ app.layout = html.Div([
                     dbc.Tabs([
                         dbc.Tab(card_mapbox, label='Map'),
                         dbc.Tab(card_areaplot, label='Trend'),
+                        dbc.Tab(card_forecastplot, label='Forecast'),
                         dbc.Tab(card_barplot, label='Ranking'),
                         dbc.Tab(card_datatable, label='Table')
                     ])
@@ -298,7 +320,6 @@ def create_barplot(selected_station):
     num_bars = 15
     cols = ['WEEK', 'REMOTE', 'STATION'] + card_types
     tmp = df[df['STATION'].isin(selected_station)][cols].copy()
-    tmp = tmp[tmp['WEEK'] >= datetime.strptime(start_date, '%Y-%m-%d')]
     tmp = tmp.groupby(['WEEK', 'STATION'], as_index=False).sum()
     tmp = pd.melt(tmp, id_vars=['WEEK', 'STATION'], value_vars=card_types, var_name='card_type', value_name='swipes')
     tmp = tmp.groupby(['WEEK', 'STATION'], as_index=False).sum()
@@ -345,7 +366,6 @@ def create_areaplot(selected_station):
         return go.Figure(data=[go.Scatter(x=[], y=[])])
     cols = ['WEEK', 'REMOTE', 'STATION'] + card_types
     tmp = df[df['STATION'].isin(selected_station)][cols].copy()
-    tmp = tmp[tmp['WEEK'] >= datetime.strptime(start_date, '%Y-%m-%d')]
     tmp = tmp.groupby('WEEK', as_index=False).sum()
     tmp = pd.melt(tmp, id_vars=['WEEK'], value_vars=card_types, var_name='card_type', value_name='swipes')
     tmp.WEEK = tmp.WEEK.apply(lambda x: '{:%Y-%m-%d}'.format(x))
@@ -371,6 +391,64 @@ def create_areaplot(selected_station):
     fig.update_layout(
         margin={"r": 0, "t": 0, "l": 0, "b": 0}
     )
+    return fig
+
+
+@app.callback(
+    Output('forecast_plot', 'figure'),
+    Input('button_filtered', 'data')
+)
+def create_forecastplot(selected_station):
+    if len(selected_station) == 0:
+        return go.Figure(data=[go.Scatter(x=[], y=[])])
+    cols = ['WEEK', 'AutoARIMA', 'interval-95-square']
+    tmp = forecast_df[forecast_df['STATION'].isin(selected_station)][cols].copy()
+    tmp.WEEK = pd.to_datetime(tmp.WEEK)
+    tmp = tmp.sort_values('WEEK').groupby('WEEK', as_index=False).sum()
+    tmp['interval-95'] = tmp['interval-95-square'] ** 0.5
+    tmp['lo-95'] = (tmp['AutoARIMA'] - tmp['interval-95']).astype('int')
+    tmp['hi-95'] = (tmp['AutoARIMA'] + tmp['interval-95']).astype('int')
+    tmp['Forecast'] = tmp['AutoARIMA'].astype('int')
+
+    fig = go.Figure([
+        go.Scatter(
+            name='Forecast',
+            x=tmp['WEEK'],
+            y=tmp['Forecast'],
+            line=dict(color='rgb(31, 119, 180)'),
+            mode='lines',
+            showlegend=False
+        ),
+        go.Scatter(
+            name='95% Upper Bound',
+            x=tmp['WEEK'],
+            y=tmp['hi-95'],
+            mode='lines',
+            marker=dict(color="#444"),
+            line=dict(width=0),
+            showlegend=False
+        ),
+        go.Scatter(
+            name='95% Lower Bound',
+            x=tmp['WEEK'],
+            y=tmp['lo-95'],
+            marker=dict(color="#444"),
+            line=dict(width=0),
+            mode='lines',
+            fillcolor='rgba(68, 68, 68, 0.3)',
+            fill='tonexty',
+            showlegend=False
+        )
+    ])
+
+    fig.update_layout(
+        yaxis_title='Forecast Daily MetroCard Swipes',
+        xaxis_title='Date',
+        hovermode="x",
+        margin=dict(l=0, r=0, t=0, b=0),
+        hoverlabel_namelength=-1
+    )
+
     return fig
 
 
