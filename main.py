@@ -29,7 +29,10 @@ api.dataset_download_file(data_url, file_name='forecast.csv')
 
 df = pd.read_csv('./main.csv.zip')
 geo_df = pd.read_csv('./station_gis.csv')
-forecast_df = pd.read_csv('./forecast.csv.zip')
+try:
+    forecast_df = pd.read_csv('./forecast.csv.zip')
+except:
+    forecast_df = pd.read_csv('./forecast.csv')
 start_date = '2020-01-04'
 
 df.WEEK = df.WEEK.apply(lambda x: datetime.strptime(x, '%Y-%m-%d'))
