@@ -27,7 +27,10 @@ api.authenticate()
 api.dataset_download_file(data_url, file_name='main.csv')
 api.dataset_download_file(data_url, file_name='forecast.csv')
 
-df = pd.read_csv('./main.csv.zip')
+try:
+	df = pd.read_csv('./main.csv.zip')
+except:
+	df = pd.read_csv('./main.csv')
 geo_df = pd.read_csv('./station_gis.csv')
 try:
     forecast_df = pd.read_csv('./forecast.csv.zip')
